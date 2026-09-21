@@ -126,6 +126,13 @@ const remoteQueryResponseSchema = z.object({
   partitionsScanned: z.number().int().nonnegative(),
   truncated: z.boolean(),
 });
+const remoteAggregateResponseSchema = z.object({
+  ok: z.literal(true),
+  field: aggregateFieldSchema,
+  buckets: z.array(aggregateBucketSchema).max(200),
+  partitionsScanned: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+});
 const remoteErrorResponseSchema = z.object({
   ok: z.literal(false),
   error: z.object({
@@ -265,38 +272,136 @@ export async function queryLogs(
   };
 }
 
-// WORKSHOP TASK: Validate the input, call the bounded aggregate endpoint, and parse its response.
-export function aggregateLogs(
+export function aggregateFallbackLogs(input: AggregateLogsInput): AggregateLogsResult {
+  const matching = FALLBACK_LOG_ROWS.filter((row) =>
+    inRange(row.timestamp, input.from, input.to),
+  );
+  const counts = new Map<string, number>();
+  for (const row of matching) {
+    const value = String(row[input.field]);
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  const buckets = [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    .slice(0, input.limit);
+
+  return {
+    field: input.field,
+    buckets,
+    partitionsScanned: 0,
+    truncated: false,
+    source: "fallback",
+  };
+}
+
+export async function aggregateLogs(
   untrustedInput: unknown,
   options: LogApiOptions = {},
 ): Promise<LogApiResult<AggregateLogsResult>> {
-  void options;
-  const result = aggregateLogsInputSchema.safeParse(untrustedInput).success
-    ? notImplemented<AggregateLogsResult>("aggregateLogs")
-    : invalidInput<AggregateLogsResult>();
-  return Promise.resolve(result);
+  const parsedInput = aggregateLogsInputSchema.safeParse(untrustedInput);
+  if (!parsedInput.success) return invalidInput();
+  const input = parsedInput.data;
+
+  const url = createUrl(
+    "aggregate",
+    { from: input.from, to: input.to, field: input.field, limit: input.limit },
+    options.baseUrl ?? CENTRAL_LOG_API_URL,
+  );
+  const remote = await fetchJson(url, options);
+  if (!remote.available) return { ok: true, data: aggregateFallbackLogs(input) };
+  if (!remote.response.ok) return rejectedResponse(remote.response.status, remote.body);
+
+  const parsedResponse = remoteAggregateResponseSchema.safeParse(remote.body);
+  if (!parsedResponse.success) return malformedResponse();
+  const buckets = parsedResponse.data.buckets.slice(0, input.limit);
+  return {
+    ok: true,
+    data: aggregateLogsResultSchema.parse({
+      field: parsedResponse.data.field,
+      buckets,
+      partitionsScanned: parsedResponse.data.partitionsScanned,
+      truncated:
+        parsedResponse.data.truncated || parsedResponse.data.buckets.length > buckets.length,
+      source: "remote",
+    }),
+  };
 }
 
-// WORKSHOP TASK: Reuse queryLogs to build a bounded profile from exact rows.
-export function profileIp(
+export async function profileIp(
   untrustedInput: unknown,
   options: LogApiOptions = {},
 ): Promise<LogApiResult<ProfileIpResult>> {
-  void options;
-  const result = profileIpInputSchema.safeParse(untrustedInput).success
-    ? notImplemented<ProfileIpResult>("profileIp")
-    : invalidInput<ProfileIpResult>();
-  return Promise.resolve(result);
+  const parsedInput = profileIpInputSchema.safeParse(untrustedInput);
+  if (!parsedInput.success) return invalidInput();
+  const input = parsedInput.data;
+
+  const queryResult = await queryLogs(
+    { from: input.from, to: input.to, ip: input.ip, limit: input.limit },
+    options,
+  );
+  if (!queryResult.ok) return queryResult;
+
+  const evidence = queryResult.data.evidence;
+  const asns = Array.from(new Set(evidence.map((row) => row.asn)));
+  const userAgents = Array.from(new Set(evidence.map((row) => row.userAgent)));
+  const eventCounts = new Map<string, number>();
+  for (const row of evidence) {
+    eventCounts.set(row.event, (eventCounts.get(row.event) ?? 0) + 1);
+  }
+  const events = Array.from(eventCounts.entries())
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+  const chronological = [...evidence].sort(
+    (left, right) =>
+      Date.parse(left.timestamp) - Date.parse(right.timestamp) ||
+      left.requestId.localeCompare(right.requestId),
+  );
+  const firstSeen = chronological.length > 0 ? chronological[0].timestamp : null;
+  const lastSeen = chronological.length > 0 ? chronological[chronological.length - 1].timestamp : null;
+
+  return {
+    ok: true,
+    data: profileIpResultSchema.parse({
+      ip: input.ip,
+      rowCount: evidence.length,
+      firstSeen,
+      lastSeen,
+      asns,
+      userAgents,
+      events,
+      evidence,
+      partitionsScanned: queryResult.data.partitionsScanned,
+      truncated: queryResult.data.truncated,
+      source: queryResult.data.source,
+    }),
+  };
 }
 
-// WORKSHOP TASK: Reuse queryLogs and order exact rows deterministically without dropping truncation.
-export function buildTimeline(
+export async function buildTimeline(
   untrustedInput: unknown,
   options: LogApiOptions = {},
 ): Promise<LogApiResult<BuildTimelineResult>> {
-  void options;
-  const result = buildTimelineInputSchema.safeParse(untrustedInput).success
-    ? notImplemented<BuildTimelineResult>("buildTimeline")
-    : invalidInput<BuildTimelineResult>();
-  return Promise.resolve(result);
+  const parsedInput = buildTimelineInputSchema.safeParse(untrustedInput);
+  if (!parsedInput.success) return invalidInput();
+  const input = parsedInput.data;
+
+  const queryResult = await queryLogs(input, options);
+  if (!queryResult.ok) return queryResult;
+
+  const events = [...queryResult.data.evidence].sort(
+    (left, right) =>
+      Date.parse(left.timestamp) - Date.parse(right.timestamp) ||
+      left.requestId.localeCompare(right.requestId),
+  );
+
+  return {
+    ok: true,
+    data: buildTimelineResultSchema.parse({
+      events,
+      partitionsScanned: queryResult.data.partitionsScanned,
+      truncated: queryResult.data.truncated,
+      source: queryResult.data.source,
+    }),
+  };
 }

@@ -82,6 +82,13 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
     buildTimeline: dependencies.services?.buildTimeline ?? buildTimeline,
   };
 
+  const observedRequestIds = new Set<string>();
+  const recordEvidence = (result: QueryLogsResult | ProfileIpResult | BuildTimelineResult): void => {
+    for (const row of "evidence" in result ? result.evidence : result.events) {
+      observedRequestIds.add(row.requestId);
+    }
+  };
+
   return {
     queryLogs: tool({
       description:
@@ -90,6 +97,7 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
       execute: async (input): Promise<LogApiResult<QueryLogsResult>> => {
         const result = await services.queryLogs(input, dependencies.logApiOptions);
         if (result.ok) {
+          recordEvidence(result.data);
           await dependencies.recordQuery(recordQueryResult("queryLogs", input, result.data));
         }
         return result;
@@ -111,8 +119,10 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
       inputSchema: profileIpInputSchema,
       execute: async (input): Promise<LogApiResult<ProfileIpResult>> => {
         const result = await services.profileIp(input, dependencies.logApiOptions);
-        if (result.ok)
+        if (result.ok) {
+          recordEvidence(result.data);
           await dependencies.recordQuery(recordQueryResult("profileIp", input, result.data));
+        }
         return result;
       },
     }),
@@ -123,6 +133,7 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
       execute: async (input): Promise<LogApiResult<BuildTimelineResult>> => {
         const result = await services.buildTimeline(input, dependencies.logApiOptions);
         if (result.ok) {
+          recordEvidence(result.data);
           await dependencies.recordQuery(recordQueryResult("buildTimeline", input, result.data));
           await dependencies.setTimeline(result.data.events);
         }
@@ -133,16 +144,21 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
       description:
         "Persist an evidence-grounded finding. Every evidence item must be an exact row returned by a prior log tool.",
       inputSchema: findingInputSchema,
-      // WORKSHOP TASK: Verify that every row was observed, persist the finding, and return success.
-      execute: (input): Promise<RecordFindingResult> => {
-        void input;
-        return Promise.resolve({
-          ok: false,
-          error: {
-            code: "NOT_IMPLEMENTED",
-            message: "Complete the grounded finding task in src/agent/tools/index.ts",
-          },
-        });
+      execute: async (input): Promise<RecordFindingResult> => {
+        const finding = findingInputSchema.parse(input);
+        for (const row of finding.evidence) {
+          if (!observedRequestIds.has(row.requestId)) {
+            return {
+              ok: false,
+              error: {
+                code: "NOT_IMPLEMENTED",
+                message: "Finding contains evidence that was not observed in a prior log query",
+              },
+            };
+          }
+        }
+        await dependencies.recordFinding(finding);
+        return { ok: true, finding };
       },
     }),
   };
