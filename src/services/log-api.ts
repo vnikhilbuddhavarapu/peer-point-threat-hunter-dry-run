@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { queryFallbackLogs } from "./fallback.js";
+import { inRange, queryFallbackLogs } from "./fallback.js";
 
 export const CENTRAL_LOG_API_URL = "https://peer-point-log-api.peer-point-user-group.workers.dev";
 export const LOG_API_TIMEOUT_MS = 8_000;

@@ -147,7 +147,19 @@ describe("threat hunter starter", () => {
       evidence: [sampleRow],
     };
     const findingResult = await tools.recordFinding.execute?.(finding, executionOptions);
-    expect(findingResult).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
-    expect(recordFinding).not.toHaveBeenCalled();
+    expect(findingResult).toMatchObject({ ok: true, finding });
+    expect(recordFinding).toHaveBeenCalledWith(finding);
+
+    const unobservedFinding = {
+      ...finding,
+      evidence: [
+        {
+          ...sampleRow,
+          requestId: "not-observed-request-id",
+        },
+      ],
+    };
+    const rejectedResult = await tools.recordFinding.execute?.(unobservedFinding, executionOptions);
+    expect(rejectedResult).toMatchObject({ ok: false, error: { code: "NOT_IMPLEMENTED" } });
   });
 });

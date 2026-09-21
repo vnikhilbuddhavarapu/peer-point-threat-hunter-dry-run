@@ -16,7 +16,7 @@ export const FALLBACK_LOG_ROWS = [
   },
 ] as const satisfies readonly LogEntry[];
 
-function inRange(timestamp: string, from: string, to: string): boolean {
+export function inRange(timestamp: string, from: string, to: string): boolean {
   const value = Date.parse(timestamp);
   return value >= Date.parse(from) && value <= Date.parse(to);
 }
