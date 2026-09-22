@@ -152,13 +152,6 @@ function malformedResponse<T>(): LogApiResult<T> {
   };
 }
 
-function notImplemented<T>(task: string): LogApiResult<T> {
-  return {
-    ok: false,
-    error: { code: "NOT_IMPLEMENTED", message: `Complete the ${task} workshop task` },
-  };
-}
-
 function rejectedResponse<T>(status: number, body: unknown): LogApiResult<T> {
   const parsed = remoteErrorResponseSchema.safeParse(body);
   return {
@@ -357,8 +350,8 @@ export async function profileIp(
       Date.parse(left.timestamp) - Date.parse(right.timestamp) ||
       left.requestId.localeCompare(right.requestId),
   );
-  const firstSeen = chronological.length > 0 ? chronological[0].timestamp : null;
-  const lastSeen = chronological.length > 0 ? chronological[chronological.length - 1].timestamp : null;
+  const firstSeen = chronological[0]?.timestamp ?? null;
+  const lastSeen = chronological[chronological.length - 1]?.timestamp ?? null;
 
   return {
     ok: true,

@@ -83,7 +83,9 @@ export function createThreatHunterTools(dependencies: ThreatHunterToolDependenci
   };
 
   const observedRequestIds = new Set<string>();
-  const recordEvidence = (result: QueryLogsResult | ProfileIpResult | BuildTimelineResult): void => {
+  const recordEvidence = (
+    result: QueryLogsResult | ProfileIpResult | BuildTimelineResult,
+  ): void => {
     for (const row of "evidence" in result ? result.evidence : result.events) {
       observedRequestIds.add(row.requestId);
     }
